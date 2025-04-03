@@ -2,6 +2,8 @@
   "name": "styled-unused-exports",
   "displayName": "Styled Unused Exports",
   "description": "Lint to detect unused exports in styled-components files",
+  "publisher": "edicarloslds",
+  "repository": "https://github.com/brunokl/styled-unused-exports",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.60.0"

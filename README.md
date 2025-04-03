@@ -1,65 +1,46 @@
-# styled-unused-exports README
+# styled-unused-exports
 
-This is the README for your extension "styled-unused-exports". After writing up a brief description, we recommend including the following sections.
+`styled-unused-exports` is a Visual Studio Code extension that helps developers detect unused styled-components exports in JavaScript and TypeScript files. This tool is particularly useful for maintaining clean and efficient codebases when working with styled-components.
 
 ## Features
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+- Automatically scans JavaScript/TypeScript files for unused styled-components exports.
+- Provides warnings in the editor for unused exports.
+- Supports `.js`, `.jsx`, `.ts`, and `.tsx` files.
+- Runs checks on file open and save events.
+- Command to manually check the current file for unused exports.
 
 ## Requirements
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+- Visual Studio Code version `^1.60.0` or higher.
+- Node.js installed in your environment.
 
 ## Extension Settings
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+This extension does not currently add any custom settings. It works out of the box.
 
-For example:
+## Commands
 
-This extension contributes the following settings:
+This extension contributes the following command:
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+- **Check Unused Styled Exports** (`styled-unused-exports.checkUnusedExports`): Manually check the current file for unused styled-components exports.
 
 ## Known Issues
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+- The extension assumes styled-components are declared using the `const` keyword. Other patterns may not be detected.
+- If a styled-component is dynamically imported or used in a non-standard way, it may be flagged as unused.
 
 ## Release Notes
 
-Users appreciate release notes as you update your extension.
+### 0.0.1
 
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
+- Initial release with support for detecting unused styled-components exports.
 
 ---
 
-## Working with Markdown
-
-You can author your README using Visual Studio Code.  Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux)
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux)
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets
-
 ## For more information
 
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
+- [Visual Studio Code Extension API](https://code.visualstudio.com/api)
+- [styled-components Documentation](https://styled-components.com/docs)
 
-**Enjoy!**
+**Enjoy using `styled-unused-exports`!**
