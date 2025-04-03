@@ -7,3 +7,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ## [Unreleased]
 
 - Initial release
+
+## [0.1.11] - 2025-04-02 
+
+### Added
+
+- Added the initial version of the extension
+- Added the command `styled-unused-exports.checkUnusedExports`
