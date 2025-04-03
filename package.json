@@ -5,7 +5,7 @@
   "icon": "images/styled-unused-exports-icon.png",
   "publisher": "edicarloslds",
   "repository": "https://github.com/brunokl/styled-unused-exports",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "engines": {
     "vscode": "^1.60.0"
   },

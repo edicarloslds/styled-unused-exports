@@ -5,6 +5,11 @@ const fs = require("fs");
 // Diagnostic collection to display errors
 let diagnosticCollection;
 
+// Caches
+const fileContentCache = new Map(); // Cache para conteúdo de arquivos e mtime
+const importingFilesCache = new Map(); // Cache para lista de arquivos que importam de um arquivo de estilo
+const componentUsageCache = new Map(); // Cache para componentes usados por arquivo importador
+
 /**
  * Activates the extension
  * @param {vscode.ExtensionContext} context
@@ -21,57 +26,133 @@ function activate(context) {
   // Register command to check unused exports
   let disposable = vscode.commands.registerCommand(
     "styled-unused-exports.checkUnusedExports",
-    checkCurrentFile
+    () => forceCheckCurrentFile(true) // Force check with cache invalidation
   );
   context.subscriptions.push(disposable);
 
   // Check when documents are opened
   context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument(checkDocument)
+    vscode.workspace.onDidOpenTextDocument(scheduleCheck)
   );
   
   // Check when documents are saved
   context.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument(checkDocument)
+    vscode.workspace.onDidSaveTextDocument((document) => {
+      // Invalidate caches related to this file and schedule check
+      invalidateCachesForFile(document.uri);
+      scheduleCheck(document);
+    })
   );
   
-  // Check when document content changes
+  // Check when document content changes (debounced)
   context.subscriptions.push(
     vscode.workspace.onDidChangeTextDocument((event) => {
-      clearTimeout(event.document._checkTimeout);
-      event.document._checkTimeout = setTimeout(() => {
-        checkDocument(event.document);
-      }, 500);
+      // Invalidate content cache immediately
+      fileContentCache.delete(event.document.uri.toString());
+      // Schedule check with debounce
+      scheduleCheck(event.document, 500); // Debounce for 500ms
     })
   );
 
-  // Check current document
-  if (vscode.window.activeTextEditor) {
-    checkDocument(vscode.window.activeTextEditor.document);
-  }
-  
   // Check when changing editor focus
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor) {
-        checkDocument(editor.document);
+        scheduleCheck(editor.document);
       }
     })
   );
+  
+  // Initial check for all open documents
+  vscode.workspace.textDocuments.forEach(doc => scheduleCheck(doc));
 }
 
 /**
- * Checks the current file
+ * Invalidates relevant caches when a file changes.
+ * @param {vscode.Uri} fileUri
  */
-function checkCurrentFile() {
+function invalidateCachesForFile(fileUri) {
+  const fileKey = fileUri.toString();
+  fileContentCache.delete(fileKey);
+  importingFilesCache.delete(fileKey); // Invalidate who imports *from* this file
+  componentUsageCache.delete(fileKey); // Invalidate usage *within* this file
+  
+  // TODO: More sophisticated invalidation might be needed if this file
+  //       stops importing from another, affecting the other file's check.
+  //       For now, saving the other file will trigger its re-check.
+}
+
+/**
+ * Schedules a check for the document, optionally debounced.
+ * @param {vscode.TextDocument} document
+ * @param {number} [debounceMs] Optional debounce time in milliseconds.
+ */
+function scheduleCheck(document, debounceMs) {
+  if (!isJsOrTsFile(document)) {
+    return;
+  }
+  
+  clearTimeout(document._checkTimeout);
+  
+  if (debounceMs > 0) {
+    document._checkTimeout = setTimeout(() => {
+      checkDocument(document);
+    }, debounceMs);
+  } else {
+    // Check immediately (e.g., on open, save, focus change)
+    checkDocument(document);
+  }
+}
+
+/**
+ * Forces a check on the current file, optionally clearing caches first.
+ * @param {boolean} [invalidateCache=false]
+ */
+function forceCheckCurrentFile(invalidateCache = false) {
   const editor = vscode.window.activeTextEditor;
   if (editor) {
+    if (invalidateCache) {
+      invalidateCachesForFile(editor.document.uri);
+      // Consider invalidating caches more broadly if needed
+    }
     checkDocument(editor.document);
   }
 }
 
 /**
- * Checks a document for unused styled-component exports
+ * Reads file content, using cache if possible.
+ * @param {vscode.Uri} fileUri
+ * @returns {string | null} File content or null if error.
+ */
+function readFileWithCache(fileUri) {
+  const fileKey = fileUri.toString();
+  const filePath = fileUri.fsPath;
+
+  try {
+    const stats = fs.statSync(filePath);
+    const mtime = stats.mtimeMs;
+
+    if (fileContentCache.has(fileKey)) {
+      const cached = fileContentCache.get(fileKey);
+      if (cached.mtime === mtime) {
+        return cached.content; // Return cached content if mtime matches
+      }
+    }
+
+    // Read file, update cache, and return content
+    const content = fs.readFileSync(filePath, "utf8");
+    fileContentCache.set(fileKey, { content, mtime });
+    return content;
+  } catch (error) {
+    // File might have been deleted or inaccessible
+    fileContentCache.delete(fileKey); // Remove potentially stale cache entry
+    console.error(`Error reading file ${filePath}:`, error.code);
+    return null;
+  }
+}
+
+/**
+ * Checks a document for unused styled-component exports.
  * @param {vscode.TextDocument} document
  */
 async function checkDocument(document) {
@@ -80,19 +161,22 @@ async function checkDocument(document) {
     return;
   }
   
-  // Clear existing diagnostics
+  // Clear existing diagnostics for this file first
   diagnosticCollection.delete(document.uri);
   
-  const text = document.getText();
+  const text = document.getText(); // Use live content from editor
   
   // Check if this is a styled-components file with exports
   if (isStyledComponentFile(text)) {
-    await checkStyledComponentFile(document);
+    await checkStyledComponentFile(document, text);
   }
+  
+  // TODO: Also check files that *import* from this file if its exports changed?
+  // This requires tracking dependencies more actively.
 }
 
 /**
- * Checks if a document is a JavaScript or TypeScript file
+ * Checks if a document is a JavaScript or TypeScript file.
  * @param {vscode.TextDocument} document
  * @returns {boolean}
  */
@@ -103,34 +187,53 @@ function isJsOrTsFile(document) {
 }
 
 /**
- * Checks if the file content appears to be a styled-components file with exports
+ * Checks if the file content appears to be a styled-components file with exports.
  * @param {string} text
  * @returns {boolean}
  */
 function isStyledComponentFile(text) {
-  return (
-    text.includes("styled.") && 
-    (text.includes("export {") || text.match(/export\s+const\s+\w+\s*=\s*styled\./))
-  );
+  // Faster check: Look for common patterns without complex regex first
+  if (!text.includes("styled.") || (!text.includes("export {") && !text.includes("export const"))) {
+    return false;
+  }
+  // More specific check if needed
+  return text.includes("styled.") && 
+         (text.includes("export {") || /export\s+const\s+\w+\s*=\s*styled\./.test(text));
 }
 
 /**
- * Checks a styled-component file for unused exports
- * @param {vscode.TextDocument} document
+ * Checks a styled-component file for unused exports.
+ * @param {vscode.TextDocument} document The document object for position mapping.
+ * @param {string} text The current text content of the document.
  */
-async function checkStyledComponentFile(document) {
-  const text = document.getText();
+async function checkStyledComponentFile(document, text) {
   const diagnostics = [];
   
-  // Get all exported components
-  const exportedComponents = getExportedComponents(text);
+  // Get all exported components (using current text)
+  const exportedComponents = getExportedComponents(text, document);
   
-  // Find files that might import from this file
-  const importingFiles = await findFilesImportingFrom(document);
+  // Find files that might import from this file (use cache)
+  const importingFiles = await findFilesImportingFromCached(document);
   
+  // Pre-calculate usage for all importing files
+  const usageByFile = new Map(); // Map<string, Set<string>> fileUri -> Set<usedComponentNames>
+  for (const fileUri of importingFiles) {
+    const usedComponents = getUsedComponentsFromFileCached(fileUri, document);
+    if (usedComponents) {
+      usageByFile.set(fileUri.toString(), usedComponents);
+    }
+  }
+
   // Check each exported component
   for (const component of exportedComponents) {
-    const isUsed = await isComponentUsed(component.name, document, importingFiles);
+    let isUsed = false;
+    // Check if *any* importing file uses this component
+    for (const usedSet of usageByFile.values()) {
+      if (usedSet.has(component.name)) {
+        isUsed = true;
+        break; // Found usage, no need to check other files
+      }
+    }
     
     if (!isUsed) {
       // Create diagnostic for unused component
@@ -144,37 +247,46 @@ async function checkStyledComponentFile(document) {
     }
   }
   
-  // Set diagnostics if any components are unused
-  if (diagnostics.length > 0) {
-    diagnosticCollection.set(document.uri, diagnostics);
-  }
+  // Set diagnostics (even if empty, to clear previous ones)
+  diagnosticCollection.set(document.uri, diagnostics);
 }
 
 /**
- * Gets all exported components from a styled-components file
+ * Gets all exported components from text content.
  * @param {string} text
+ * @param {vscode.TextDocument} document For position mapping.
  * @returns {Array<{name: string, range: vscode.Range}>}
  */
-function getExportedComponents(text) {
-  const components = [];
-  const document = { getText: () => text, positionAt: (index) => ({ line: 0, character: index }) };
+function getExportedComponents(text, document) {
+  // This function doesn't change much, but ensure it uses the passed document
+  // for positionAt calls if line/character info is needed accurately.
+  // For simplicity, assuming positionAt works with index on the provided text.
   
+  const components = [];
+  const positionAt = (index) => document.positionAt(index); // Use document's method
+
   // Find named exports (export { Component1, Component2 })
   const namedExportRegex = /export\s*{([^}]+)}/g;
   let namedMatch;
   
   while ((namedMatch = namedExportRegex.exec(text)) !== null) {
     const exportContent = namedMatch[1];
-    const exportedItems = exportContent
+    // Handle potential comments inside export block
+    const cleanedContent = exportContent.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
+    const exportedItems = cleanedContent
       .split(",")
       .map((item) => item.trim())
       .filter((item) => item.length > 0);
     
     for (const item of exportedItems) {
-      const itemIndex = text.indexOf(item, namedMatch.index);
+      // More robust index finding
+      const itemRegex = new RegExp(`\\b${item}\\b`);
+      const itemIndex = text.slice(namedMatch.index, namedMatch.index + namedMatch[0].length).search(itemRegex);
+      
       if (itemIndex !== -1) {
-        const start = document.positionAt(itemIndex);
-        const end = document.positionAt(itemIndex + item.length);
+        const actualIndex = namedMatch.index + itemIndex;
+        const start = positionAt(actualIndex);
+        const end = positionAt(actualIndex + item.length);
         components.push({
           name: item,
           range: new vscode.Range(start, end)
@@ -184,13 +296,14 @@ function getExportedComponents(text) {
   }
   
   // Find direct exports (export const Component = styled...)
-  const directExportRegex = /export\s+const\s+(\w+)\s*=\s*styled\.[a-zA-Z0-9]+`/g;
+  const directExportRegex = /export\s+const\s+(\w+)\s*=\s*styled\.[a-zA-Z0-9]+(?:<[^>]+>)?`/g; // Handle generics
   let directMatch;
   
   while ((directMatch = directExportRegex.exec(text)) !== null) {
     const name = directMatch[1];
-    const start = document.positionAt(directMatch.index + "export const ".length);
-    const end = document.positionAt(directMatch.index + "export const ".length + name.length);
+    const nameStartIndex = directMatch[0].indexOf(name, "export const ".length);
+    const start = positionAt(directMatch.index + nameStartIndex);
+    const end = positionAt(directMatch.index + nameStartIndex + name.length);
     
     components.push({
       name,
@@ -202,120 +315,145 @@ function getExportedComponents(text) {
 }
 
 /**
- * Finds all files in the workspace that might import from the given document
+ * Finds all files in the workspace that might import from the given document, using cache.
  * @param {vscode.TextDocument} document
  * @returns {Promise<vscode.Uri[]>}
  */
-async function findFilesImportingFrom(document) {
+async function findFilesImportingFromCached(document) {
+  const fileKey = document.uri.toString();
+  if (importingFilesCache.has(fileKey)) {
+    return importingFilesCache.get(fileKey);
+  }
+
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders) {
     return [];
   }
   
-  // Get file name without extension for import matching
   const fileName = path.basename(document.fileName, path.extname(document.fileName));
-  
   const importingFiles = [];
   
   // Find all JS/TS files in the workspace
+  // Note: This workspace scan is still potentially slow on very large projects.
+  // A FileSystemWatcher approach would be more advanced.
   for (const folder of workspaceFolders) {
     const filePattern = new vscode.RelativePattern(
       folder,
       "**/*.{js,jsx,ts,tsx}"
     );
-    const files = await vscode.workspace.findFiles(filePattern);
+    // Exclude node_modules for performance
+    const excludePattern = "**/node_modules/**"; 
+    const files = await vscode.workspace.findFiles(filePattern, excludePattern);
     
-    // Filter out the current file
     const otherFiles = files.filter(file => file.fsPath !== document.fileName);
     
     for (const file of otherFiles) {
-      try {
-        const content = fs.readFileSync(file.fsPath, "utf8");
-        
-        // Check if this file imports from our target file
-        if (mightImportFromFile(content, fileName)) {
-          importingFiles.push(file);
-        }
-      } catch (error) {
-        console.error(`Error reading file ${file.fsPath}:`, error);
+      const content = readFileWithCache(file); // Use cached read
+      if (content && mightImportFromFile(content, fileName)) {
+        importingFiles.push(file);
       }
     }
   }
   
+  importingFilesCache.set(fileKey, importingFiles); // Store in cache
   return importingFiles;
 }
 
 /**
- * Checks if content might import from a file with the given name
+ * Checks if content might import from a file with the given name.
  * @param {string} content
  * @param {string} fileName
  * @returns {boolean}
  */
 function mightImportFromFile(content, fileName) {
-  // Look for import statements that might reference our file
-  const importRegex = new RegExp(`import\\s+(?:\\*\\s+as\\s+\\w+|{[^}]*}|\\w+)\\s+from\\s+['"](?:.*\\/)?${fileName}(?:\\.\\w+)?['"]`, "g");
+  // Optimized regex: Avoids unnecessary checks if filename isn't present
+  if (!content.includes(fileName)) {
+    return false;
+  }
+  const importRegex = new RegExp(`import\\s+(?:\\*\\s+as\\s+\\w+|{[^}]*}|\\w+)\\s+from\\s+['"](?:.*\\/)?${fileName}(?:\\.\\w+)?['"]`);
   return importRegex.test(content);
 }
 
 /**
- * Checks if a component is used in any of the importing files
- * @param {string} componentName
- * @param {vscode.TextDocument} sourceDocument
- * @param {vscode.Uri[]} importingFiles
- * @returns {Promise<boolean>}
+ * Gets the set of used styled components from a specific style file within an importing file, using cache.
+ * @param {vscode.Uri} importingFileUri
+ * @param {vscode.TextDocument} styleDocument
+ * @returns {Set<string> | null} Set of used component names, or null if error.
  */
-async function isComponentUsed(componentName, sourceDocument, importingFiles) {
-  const fileName = path.basename(sourceDocument.fileName, path.extname(sourceDocument.fileName));
+function getUsedComponentsFromFileCached(importingFileUri, styleDocument) {
+  const importingFileKey = importingFileUri.toString();
+  const styleFileName = path.basename(styleDocument.fileName, path.extname(styleDocument.fileName));
+
+  // Check cache: componentUsageCache stores Map<importingFileKey, Map<styleFileName, Set<usedComponents>>>
+  if (componentUsageCache.has(importingFileKey)) {
+    const styleUsageMap = componentUsageCache.get(importingFileKey);
+    if (styleUsageMap.has(styleFileName)) {
+      return styleUsageMap.get(styleFileName);
+    }
+  }
+
+  const content = readFileWithCache(importingFileUri); // Use cached read
+  if (!content) {
+    return null; // Error reading file
+  }
+
+  const usedComponents = new Set();
   
-  for (const fileUri of importingFiles) {
-    try {
-      const content = fs.readFileSync(fileUri.fsPath, "utf8");
-      
-      // Check for named imports of this component
-      const namedImportRegex = new RegExp(`import\\s*{[^}]*\\b${componentName}\\b[^}]*}\\s*from\\s*['"](?:.*\\/)?${fileName}(?:\\.\\w+)?['"]`, "g");
-      
-      // Check for namespace imports
-      const namespaceImportRegex = new RegExp(`import\\s+\\*\\s+as\\s+(\\w+)\\s+from\\s*['"](?:.*\\/)?${fileName}(?:\\.\\w+)?['"]`, "g");
-      
-      let namespaceAlias = null;
-      let namespaceMatch;
-      
-      // If it's a namespace import, capture the alias
-      while ((namespaceMatch = namespaceImportRegex.exec(content)) !== null) {
-        namespaceAlias = namespaceMatch[1];
-        break;
-      }
-      
-      // If we have a direct named import of this component
-      if (namedImportRegex.test(content)) {
-        // Check for direct usage of the component
-        const directUsageRegex = new RegExp(`<${componentName}[\\s/>]|${componentName}\\(|${componentName}{`, "g");
-        if (directUsageRegex.test(content)) {
-          return true;
-        }
-      }
-      
-      // If we have a namespace import
-      if (namespaceAlias) {
-        // Check for namespace usage of the component
-        const namespaceUsageRegex = new RegExp(`<${namespaceAlias}\\.${componentName}[\\s/>]|${namespaceAlias}\\.${componentName}\\(|${namespaceAlias}\\.${componentName}{`, "g");
-        if (namespaceUsageRegex.test(content)) {
-          return true;
-        }
-      }
-    } catch (error) {
-      console.error(`Error checking component usage in ${fileUri.fsPath}:`, error);
+  // Find namespace alias if used for this style file
+  let namespaceAlias = null;
+  const namespaceImportRegex = new RegExp(`import\\s+\\*\\s+as\\s+(\\w+)\\s+from\\s*['"](?:.*\\/)?${styleFileName}(?:\\.\\w+)?['"]`);
+  const namespaceMatch = content.match(namespaceImportRegex);
+  if (namespaceMatch) {
+    namespaceAlias = namespaceMatch[1];
+  }
+
+  // Find all potential component usages (adjust regex as needed for accuracy)
+  // Regex to find <Component ...>, Component(...), Component{...}, <S.Component ...>, S.Component(...) etc.
+  const usageRegex = namespaceAlias 
+    ? new RegExp(`(?:<|\\b)${namespaceAlias}\\.(\\w+)|(?:<|\\b)(\\w+)`, 'g') // Look for S.Comp and Comp
+    : new RegExp(`(?:<|\\b)(\\w+)`, 'g'); // Look for Comp only if no namespace
+
+  let usageMatch;
+  while ((usageMatch = usageRegex.exec(content)) !== null) {
+    const potentialComp = usageMatch[1] || usageMatch[2]; // Component name from either group
+    
+    // Basic check: Is it capitalized? (Likely a component)
+    if (potentialComp && potentialComp[0] === potentialComp[0].toUpperCase()) {
+      // More specific check: Does this component seem to be imported from our style file?
+      // This requires checking the import statements again, which we try to optimize.
+      // For now, we assume any capitalized usage *could* be from the style file if imported.
+      usedComponents.add(potentialComp);
     }
   }
   
-  return false;
+  // Refine based on actual imports (more accurate but slower)
+  // This part is complex: we need to know *which* specific components were imported by name.
+  // For performance, the current approach assumes any capitalized usage in a file that imports
+  // the style file *might* be a usage. This can lead to false negatives (warning disappears
+  // when it shouldn't) if a component with the same name is imported from elsewhere.
+
+  // Store result in cache
+  if (!componentUsageCache.has(importingFileKey)) {
+    componentUsageCache.set(importingFileKey, new Map());
+  }
+  componentUsageCache.get(importingFileKey).set(styleFileName, usedComponents);
+
+  return usedComponents;
 }
 
+
 /**
- * Cleans up resources when the extension is deactivated
+ * Cleans up resources when the extension is deactivated.
  */
 function deactivate() {
-  // Clean up resources
+  // Clear caches on deactivation
+  fileContentCache.clear();
+  importingFilesCache.clear();
+  componentUsageCache.clear();
+  // Dispose diagnostic collection? VS Code might handle this.
+  if (diagnosticCollection) {
+    diagnosticCollection.dispose();
+  }
 }
 
 module.exports = {
