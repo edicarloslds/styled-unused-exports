@@ -21,10 +21,25 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check if version exists
+        id: check
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          EXISTS=$(curl -s -o /dev/null -w "%{http_code}" https://marketplace.visualstudio.com/items?itemName=$(node -p "require('./package.json').publisher").$(node -p "require('./package.json').name").$VERSION)
+          if [ "$EXISTS" == "200" ]; then
+            echo "Version $VERSION already exists in marketplace"
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+          else
+            echo "Version $VERSION does not exist"
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          fi
+
       - name: Package extension
+        if: steps.check.outputs.should_publish == 'true'
         run: npm run vsce:package
 
       - name: Publish to Visual Studio Marketplace
+        if: steps.check.outputs.should_publish == 'true'
         run: npm run vsce:publish
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}

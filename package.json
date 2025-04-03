@@ -30,7 +30,7 @@
   "scripts": {
     "lint": "eslint .",
     "pretest": "npm run lint",
-    "test": "node ./test/runTest.js",
+    "test": "node ./test/extension.test.js",
     "vscode:prepublish": "npm run lint",
     "vsce:package": "vsce package",
     "vsce:publish": "vsce publish"
