@@ -8,6 +8,12 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 - Initial release
 
+## [0.1.13] - 2025-04-09
+
+### Added
+
+- Improved performance with debouncing on file save, and enhance component detection logic
+
 ## [0.1.12] - 2025-04-09
 
 ### Fixed

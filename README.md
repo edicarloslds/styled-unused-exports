@@ -40,6 +40,10 @@ This extension contributes the following command:
 
 - Improved performance by debouncing the check triggered on file save, reducing potential VS Code freezes.
 
+### 0.0.3
+
+- Improved performance with debouncing on file save, and enhance component detection logic
+
 ---
 
 ## For more information
