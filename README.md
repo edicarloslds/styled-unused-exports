@@ -36,6 +36,10 @@ This extension contributes the following command:
 
 - Initial release with support for detecting unused styled-components exports.
 
+### 0.0.2
+
+- Improved performance by debouncing the check triggered on file save, reducing potential VS Code freezes.
+
 ---
 
 ## For more information

@@ -408,31 +408,46 @@ function getUsedComponentsFromFileCached(importingFileUri, styleDocument) {
     namespaceAlias = namespaceMatch[1];
   }
 
-  // Find all potential component usages (adjust regex as needed for accuracy)
-  // Regex to find <Component ...>, Component(...), Component{...}, <S.Component ...>, S.Component(...) etc.
-  const usageRegex = namespaceAlias 
-    ? new RegExp(`(?:<|\\b)${namespaceAlias}\\.(\\w+)|(?:<|\\b)(\\w+)`, 'g') // Look for S.Comp and Comp
-    : new RegExp(`(?:<|\\b)(\\w+)`, 'g'); // Look for Comp only if no namespace
+  // Lista de elementos HTML nativos em letras minúsculas
+  const htmlElements = new Set([
+    'a', 'abbr', 'address', 'article', 'aside', 'audio', 'b', 'base', 'bdi', 'bdo', 'blockquote', 
+    'body', 'br', 'button', 'canvas', 'caption', 'cite', 'code', 'col', 'colgroup', 'data', 'datalist', 
+    'dd', 'del', 'details', 'dfn', 'dialog', 'div', 'dl', 'dt', 'em', 'embed', 'fieldset', 'figcaption', 
+    'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'header', 'hgroup', 'hr', 
+    'html', 'i', 'iframe', 'img', 'input', 'ins', 'kbd', 'label', 'legend', 'li', 'link', 'main', 'map', 
+    'mark', 'menu', 'meta', 'meter', 'nav', 'noscript', 'object', 'ol', 'optgroup', 'option', 'output', 
+    'p', 'param', 'picture', 'pre', 'progress', 'q', 'rp', 'rt', 'ruby', 's', 'samp', 'script', 'section', 
+    'select', 'small', 'source', 'span', 'strong', 'style', 'sub', 'summary', 'sup', 'svg', 'table', 
+    'tbody', 'td', 'template', 'textarea', 'tfoot', 'th', 'thead', 'time', 'title', 'tr', 'track', 'u', 
+    'ul', 'var', 'video', 'wbr'
+  ]);
 
-  let usageMatch;
-  while ((usageMatch = usageRegex.exec(content)) !== null) {
-    const potentialComp = usageMatch[1] || usageMatch[2]; // Component name from either group
-    
-    // Basic check: Is it capitalized? (Likely a component)
-    if (potentialComp && potentialComp[0] === potentialComp[0].toUpperCase()) {
-      // More specific check: Does this component seem to be imported from our style file?
-      // This requires checking the import statements again, which we try to optimize.
-      // For now, we assume any capitalized usage *could* be from the style file if imported.
-      usedComponents.add(potentialComp);
+  // Find all potential component usages (adjust regex as needed for accuracy)
+  if (namespaceAlias) {
+    // Se está usando namespace (ex: S.Component), procura por padrões como <S.Component> ou S.Component(...)
+    const namespaceUsageRegex = new RegExp(`(?:<|\\b)${namespaceAlias}\\.(\\w+)`, 'g');
+    let namespaceMatch;
+    while ((namespaceMatch = namespaceUsageRegex.exec(content)) !== null) {
+      const componentName = namespaceMatch[1];
+      usedComponents.add(componentName);
+    }
+  } else {
+    // Procura por componentes sem namespace, mas elimina elementos HTML nativos
+    const componentUsageRegex = new RegExp(`<(\\w+)[\\s>]`, 'g');
+    let componentMatch;
+    while ((componentMatch = componentUsageRegex.exec(content)) !== null) {
+      const potentialComp = componentMatch[1];
+      
+      // Verifica se começa com letra maiúscula (convenção React para componentes)
+      // E não é um elemento HTML nativo
+      if (potentialComp && 
+          potentialComp[0] === potentialComp[0].toUpperCase() && 
+          !htmlElements.has(potentialComp.toLowerCase())) {
+        usedComponents.add(potentialComp);
+      }
     }
   }
   
-  // Refine based on actual imports (more accurate but slower)
-  // This part is complex: we need to know *which* specific components were imported by name.
-  // For performance, the current approach assumes any capitalized usage in a file that imports
-  // the style file *might* be a usage. This can lead to false negatives (warning disappears
-  // when it shouldn't) if a component with the same name is imported from elsewhere.
-
   // Store result in cache
   if (!componentUsageCache.has(importingFileKey)) {
     componentUsageCache.set(importingFileKey, new Map());
@@ -441,7 +456,6 @@ function getUsedComponentsFromFileCached(importingFileUri, styleDocument) {
 
   return usedComponents;
 }
-
 
 /**
  * Cleans up resources when the extension is deactivated.
