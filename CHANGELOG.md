@@ -8,6 +8,12 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 - Initial release
 
+## [0.1.12] - 2025-04-09
+
+### Fixed
+
+- Improved performance by debouncing the check triggered on file save, reducing potential VS Code freezes.
+
 ## [0.1.11] - 2025-04-02 
 
 ### Added

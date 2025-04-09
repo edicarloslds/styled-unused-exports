@@ -38,9 +38,10 @@ function activate(context) {
   // Check when documents are saved
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((document) => {
-      // Invalidate caches related to this file and schedule check
+      // Invalidate caches related to this file
       invalidateCachesForFile(document.uri);
-      scheduleCheck(document);
+      // Schedule check with debounce to avoid freezing on save
+      scheduleCheck(document, 500); // Debounce for 500ms
     })
   );
   
